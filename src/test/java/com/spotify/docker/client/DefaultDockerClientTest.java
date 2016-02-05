@@ -34,6 +34,7 @@ import com.fasterxml.jackson.databind.util.StdDateFormat;
 import com.spotify.docker.client.DockerClient.AttachParameter;
 import com.spotify.docker.client.DockerClient.BuildParam;
 import com.spotify.docker.client.DockerClient.ExecCreateParam;
+import com.spotify.docker.client.messages.AttachedNetwork;
 import com.spotify.docker.client.messages.AuthConfig;
 import com.spotify.docker.client.messages.Container;
 import com.spotify.docker.client.messages.ContainerConfig;
@@ -136,6 +137,7 @@ import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.instanceOf;
@@ -269,11 +271,6 @@ public class DefaultDockerClientTest {
 
   @Test
   public void testPullPrivateRepoWithAuth() throws Exception {
-    final AuthConfig authConfig = AuthConfig.builder()
-        .email(AUTH_EMAIL)
-        .username(AUTH_USERNAME)
-        .password(AUTH_PASSWORD)
-        .build();
     sut.pull("dxia2/scratch-private:latest", authConfig);
   }
 
@@ -556,8 +553,7 @@ public class DefaultDockerClientTest {
     final String dockerDirectory = Resources.getResource("dockerDirectory").getPath();
     final AtomicReference<String> imageIdFromMessage = new AtomicReference<>();
 
-    final DefaultDockerClient sut2 = DefaultDockerClient.builder()
-        .uri(dockerEndpoint)
+    final DefaultDockerClient sut2 = DefaultDockerClient.fromEnv()
         .authConfig(authConfig)
         .build();
 
@@ -579,11 +575,8 @@ public class DefaultDockerClientTest {
   @Test
   public void testBuildPrivateRepoWithAuth() throws Exception {
     final String dockerDirectory = Resources.getResource("dockerDirectoryNeedsAuth").getPath();
-    final AuthConfig authConfig = AuthConfig.builder().email(AUTH_EMAIL).username(AUTH_USERNAME)
-        .password(AUTH_PASSWORD).build();
 
-    final DefaultDockerClient sut2 = DefaultDockerClient.builder()
-        .uri(dockerEndpoint)
+    final DefaultDockerClient sut2 = DefaultDockerClient.fromEnv()
         .authConfig(authConfig)
         .build();
 
@@ -1249,6 +1242,60 @@ public class DefaultDockerClientTest {
     assertThat(actual.publishAllPorts(), equalTo(expected.publishAllPorts()));
     assertThat(actual.dns(), equalTo(expected.dns()));
     assertThat(actual.cpuShares(), equalTo(expected.cpuShares()));
+  }
+  
+  @Test
+  public void testContainerWithAppArmorLogs() throws Exception {
+    assumeTrue(
+        "Docker API should be at least v1.21 to support Container Creation with "
+            + "HostConfig, got " + sut.version().apiVersion(),
+        compareVersion(sut.version().apiVersion(), "1.21") >= 0);
+
+    sut.pull(BUSYBOX_LATEST);
+
+    final boolean privileged = true;
+    final boolean publishAllPorts = true;
+    final String dns = "1.2.3.4";
+    final HostConfig expected = HostConfig.builder().privileged(privileged)
+        .publishAllPorts(publishAllPorts).dns(dns).cpuShares((long) 4096).build();
+
+    final String stopSignal = "SIGTERM";
+
+    final ContainerConfig config = ContainerConfig.builder().image(BUSYBOX_LATEST)
+        .hostConfig(expected).stopSignal(stopSignal).build();
+    final String name = randomName();
+    final ContainerCreation creation = sut.createContainer(config, name);
+    final String id = creation.id();
+
+    sut.startContainer(id);
+
+    final ContainerInfo inspection = sut.inspectContainer(id);
+    final HostConfig actual = inspection.hostConfig();
+
+    assertThat(actual.privileged(), equalTo(expected.privileged()));
+    assertThat(actual.publishAllPorts(), equalTo(expected.publishAllPorts()));
+    assertThat(actual.dns(), equalTo(expected.dns()));
+    assertThat(actual.cpuShares(), equalTo(expected.cpuShares()));
+    assertThat(sut.inspectContainer(id).config().getStopSignal(), equalTo(config.getStopSignal()));
+    assertThat(inspection.appArmorProfile(), equalTo(""));
+    assertThat(inspection.execId(), equalTo(null));
+    assertThat(inspection.logPath(), containsString(id + "-json.log"));
+    assertThat(inspection.restartCount(), equalTo(0L));
+    assertThat(inspection.mounts().isEmpty(), equalTo(true));
+
+    final List<Container> containers =
+        sut.listContainers(DockerClient.ListContainersParam.allContainers(),
+            DockerClient.ListContainersParam.exitedContainers());
+
+    Container targetCont = null;
+    for (Container container : containers) {
+      if (container.id().equals(id)) {
+        targetCont = container;
+        break;
+      }
+    }
+    assertThat(targetCont.imageId(), equalTo(inspection.image()));
+
   }
 
   @Test
@@ -2108,6 +2155,20 @@ public class DefaultDockerClientTest {
     assertThat(network.containers().size(), equalTo(1));
     assertThat(network.containers().get(containerCreation.id()), notNullValue());
 
+    final ContainerInfo containerInfo = sut.inspectContainer(containerCreation.id());
+    assertThat(containerInfo.networkSettings().networks().size(), is(2));
+    final AttachedNetwork attachedNetwork =
+        containerInfo.networkSettings().networks().get(networkName);
+    assertThat(attachedNetwork, is(notNullValue()));
+    assertThat(attachedNetwork.endpointId(), is(notNullValue()));
+    assertThat(attachedNetwork.gateway(), is(notNullValue()));
+    assertThat(attachedNetwork.ipAddress(), is(notNullValue()));
+    assertThat(attachedNetwork.ipPrefixLen(), is(notNullValue()));
+    assertThat(attachedNetwork.macAddress(), is(notNullValue()));
+    assertThat(attachedNetwork.ipv6Gateway(), is(notNullValue()));
+    assertThat(attachedNetwork.globalIPv6Address(), is(notNullValue()));
+    assertThat(attachedNetwork.globalIPv6PrefixLen(), greaterThanOrEqualTo(0));
+
     sut.disconnectFromNetwork(containerCreation.id(), networkCreation.id());
     network = sut.inspectNetwork(networkCreation.id());
     assertThat(network.containers().size(), equalTo(0));
@@ -2118,6 +2179,47 @@ public class DefaultDockerClientTest {
 
   }
 
+  @Test
+  public void testRestartPolicyAlways() throws Exception {
+    testRestartPolicy(HostConfig.RestartPolicy.always());
+  }
+
+  @Test
+  public void testRestartUnlessStopped() throws Exception {
+    testRestartPolicy(HostConfig.RestartPolicy.unlessStopped());
+  }
+
+  @Test
+  public void testRestartOnFailure() throws Exception {
+    testRestartPolicy(HostConfig.RestartPolicy.onFailure(5));
+  }
+
+  private void testRestartPolicy(HostConfig.RestartPolicy restartPolicy) throws Exception {
+    sut.pull(BUSYBOX_LATEST);
+
+    final HostConfig hostConfig = HostConfig.builder()
+            .restartPolicy(restartPolicy)
+            .build();
+
+    final ContainerConfig containerConfig = ContainerConfig.builder()
+            .image(BUSYBOX_LATEST)
+            // make sure the container's busy doing something upon startup
+            .cmd("sh", "-c", "while :; do sleep 1; done")
+            .hostConfig(hostConfig)
+            .build();
+
+    final String containerName = randomName();
+    final ContainerCreation containerCreation = sut.createContainer(containerConfig, containerName);
+    final String containerId = containerCreation.id();
+
+    final ContainerInfo info = sut.inspectContainer(containerId);
+
+    assertThat(info.hostConfig().restartPolicy().name(), is(restartPolicy.name()));
+    Integer retryCount = restartPolicy.maxRetryCount() == null ?
+            0 : restartPolicy.maxRetryCount();
+
+    assertThat(info.hostConfig().restartPolicy().maxRetryCount(), is(retryCount));
+  }
 
   private String randomName() {
     return nameTag + '-' + toHexString(ThreadLocalRandom.current().nextLong());

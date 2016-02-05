@@ -54,6 +54,12 @@ public class ContainerInfo {
   @JsonProperty("MountLabel") private String mountLabel;
   @JsonProperty("Volumes") private ImmutableMap<String, String> volumes;
   @JsonProperty("VolumesRW") private ImmutableMap<String, Boolean> volumesRW;
+  @JsonProperty("AppArmorProfile") private String appArmorProfile;
+  @JsonProperty("ExecIDs") private ImmutableList<String> execId;
+  @JsonProperty("LogPath") private String logPath;
+  @JsonProperty("RestartCount") private Long restartCount;
+  @JsonProperty("Mounts") private ImmutableList<ContainerMount> mountsList;
+  
   /**
    * This field is an extension defined by the Docker Swarm API, therefore it will only
    * be populated when communicating with a Swarm cluster.
@@ -215,6 +221,23 @@ public class ContainerInfo {
     if (node != null ? !node.equals(that.node) : that.node != null) {
       return false;
     }
+    if (appArmorProfile != null ? !appArmorProfile.equals(that.appArmorProfile) : 
+        that.appArmorProfile != null) {
+        return false;
+      }
+    if (execId != null ? !execId.equals(that.execId) : that.execId != null) {
+        return false;
+      }
+    if (logPath != null ? !logPath.equals(that.logPath) : that.logPath != null) {
+        return false;
+      }
+    if (restartCount != null ? !restartCount.equals(that.restartCount) : 
+        that.restartCount != null) {
+        return false;
+      }
+    if (mountsList != null ? !mountsList.equals(that.mountsList) : that.mountsList != null) {
+        return false;
+      }
 
     return true;
   }
@@ -241,6 +264,11 @@ public class ContainerInfo {
     result = 31 * result + (volumes != null ? volumes.hashCode() : 0);
     result = 31 * result + (volumesRW != null ? volumesRW.hashCode() : 0);
     result = 31 * result + (node != null ? node.hashCode() : 0);
+    result = 31 * result + (appArmorProfile != null ? appArmorProfile.hashCode() : 0);
+    result = 31 * result + (execId != null ? execId.hashCode() : 0);
+    result = 31 * result + (logPath != null ? logPath.hashCode() : 0);
+    result = 31 * result + (restartCount != null ? restartCount.hashCode() : 0);
+    result = 31 * result + (mountsList != null ? mountsList.hashCode() : 0);
     return result;
   }
 
@@ -267,6 +295,11 @@ public class ContainerInfo {
         .add("volumes", volumes)
         .add("volumesRW", volumesRW)
         .add("node", node)
+        .add("appArmorProfile", appArmorProfile)
+        .add("execIDs", execId)
+        .add("logPath", logPath)
+        .add("restartCount", restartCount)
+        .add("mounts", mountsList)
         .toString();
   }
 
@@ -325,5 +358,25 @@ public class ContainerInfo {
               .add("name", name)
               .toString();
     }
+  }
+
+  public String appArmorProfile() {
+    return appArmorProfile;
+  }
+
+  public List<String> execId() {
+    return execId;
+  }
+
+  public String logPath() {
+    return logPath;
+  }
+
+  public Long restartCount() {
+    return restartCount;
+  }
+
+  public List<ContainerMount> mounts() {
+    return mountsList;
   }
 }
